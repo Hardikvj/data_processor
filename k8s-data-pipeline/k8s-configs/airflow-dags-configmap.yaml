@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airflow-dags
+  namespace: airflow
+data:
+  batch_processing_dag.py: |
+    from airflow import DAG
+    from airflow.providers.cncf.kubernetes.operators.spark_kubernetes import SparkKubernetesOperator
+    from airflow.providers.mongo.hooks.mongo import MongoHook
+    from airflow.operators.python import PythonOperator
+    from airflow.operators.bash import BashOperator
+    from datetime import datetime, timedelta
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    default_args = {
+        'owner': 'data-team',
+        'depends_on_past': False,
+        'start_date': datetime(2024, 1, 1),
+        'email_on_failure': True,
+        'email_on_retry': False,
+        'retries': 3,
+        'retry_delay': timedelta(minutes=5),
+    }
+
+    dag = DAG(
+        'batch_2tb_processing',
+        default_args=default_args,
+        description='Process 2TB compressed data to MongoDB',
+        schedule_interval='@daily',
+        catchup=False,
+        tags=['spark', 'batch', 'mongodb']
+    )
+
+    # Check data availability
+    check_data = BashOperator(
+        task_id='check_data_availability',
+        bash_command='mc ls minio/data-bucket/input/2tb-dataset/ | wc -l',
+        dag=dag
+    )
+
+    # Submit Spark batch job
+    submit_spark = SparkKubernetesOperator(
+        task_id='submit_batch_processor',
+        namespace='default',
+        application_file='spark-batch-application.yaml',
+        kubernetes_conn_id='kubernetes_default',
+        dag=dag
+    )
+
+    # Monitor progress
+    def monitor_processing(**context):
+        """Monitor MongoDB for processing progress"""
+        mongo = MongoHook(conn_id='mongodb_default')
+        client = mongo.get_conn()
+        db = client.compressed_data
+        
+        # Get statistics
+        stats = db.command("collStats", "documents")
+        total_docs = stats.get("count", 0)
+        total_size = stats.get("size", 0)
+        
+        # Get compression stats
+        pipeline = [
+            {"$group": {
+                "_id": None,
+                "avg_ratio": {"$avg": "$compression_ratio"},
+                "total_original": {"$sum": "$original_size"},
+                "total_compressed": {"$sum": "$compressed_size"}
+            }}
+        ]
+        
+        compression_stats = list(db.documents.aggregate(pipeline))
+        
+        if compression_stats:
+            stats = compression_stats[0]
+            logger.info(f"""
+            Processing Statistics:
+            - Total Documents: {total_docs:,}
+            - Collection Size: {total_size / (1024**3):.2f} GB
+            - Average Compression Ratio: {stats['avg_ratio']:.2f}:1
+            - Original Size: {stats['total_original'] / (1024**3):.2f} GB
+            - Compressed Size: {stats['total_compressed'] / (1024**3):.2f} GB
+            """)
+            
+            # Push metrics to XCom
+            context['task_instance'].xcom_push(key='total_docs', value=total_docs)
+            context['task_instance'].xcom_push(key='compression_ratio', value=stats['avg_ratio'])
+        
+        return total_docs > 0
+
+    monitor = PythonOperator(
+        task_id='monitor_progress',
+        python_callable=monitor_processing,
+        dag=dag
+    )
+
+    # Validate results
+    def validate_compression(**context):
+        """Validate compression results"""
+        total_docs = context['task_instance'].xcom_pull(task_ids='monitor_progress', key='total_docs')
+        compression_ratio = context['task_instance'].xcom_pull(task_ids='monitor_progress', key='compression_ratio')
+        
+        if compression_ratio < 5:
+            raise ValueError(f"Compression ratio {compression_ratio} is below target of 5:1")
+        
+        logger.info(f"Validation passed: {total_docs} docs with {compression_ratio:.2f}:1 compression")
+
+    validate = PythonOperator(
+        task_id='validate_results',
+        python_callable=validate_compression,
+        dag=dag
+    )
+
+    # Define dependencies
+    check_data >> submit_spark >> monitor >> validate
+
+---
