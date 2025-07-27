@@ -54,7 +54,6 @@ This script will:
 ```
 
 Then access:
-- **Interactive Dashboard**: Open `k8s-data-pipeline-dashboard.html` in your browser
 - **Airflow UI**: http://localhost:8080 (admin/admin)
 - **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
 - **Grafana**: http://localhost:3000 (admin/admin123)
