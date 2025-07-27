@@ -1,0 +1,93 @@
+# mongodb-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-data-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: fast-ssd
+
+---
+# minio-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 3Ti
+  storageClassName: standard
+
+---
+# prometheus-servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: spark-metrics
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: spark-driver
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics/prometheus
+
+---
+# grafana-dashboard-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+data:
+  spark-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "2TB Data Processing Pipeline",
+        "panels": [
+          {
+            "title": "Processing Rate",
+            "targets": [
+              {
+                "expr": "rate(data_processed_bytes[5m])"
+              }
+            ]
+          },
+          {
+            "title": "Compression Ratio",
+            "targets": [
+              {
+                "expr": "compression_ratio"
+              }
+            ]
+          },
+          {
+            "title": "Active Spark Executors",
+            "targets": [
+              {
+                "expr": "spark_executors_active"
+              }
+            ]
+          },
+          {
+            "title": "MongoDB Documents",
+            "targets": [
+              {
+                "expr": "mongodb_documents"
+              }
+            ]
+          }
+        ]
+      }
+    }
