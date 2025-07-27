@@ -1,0 +1,77 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: stream-processor-2tb
+  namespace: default
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: "spark-processor:latest"
+  imagePullPolicy: Always
+  mainApplicationFile: "local:///opt/spark/apps/main.py"
+  arguments:
+    - "stream"
+    - "--kafka-servers"
+    - "kafka:9092"
+    - "--topic"
+    - "data-feed"
+    - "--checkpoint-dir"
+    - "s3a://data-bucket/checkpoints"
+  sparkVersion: "3.5.0"
+  sparkConf:
+    "spark.streaming.kafka.maxRatePerPartition": "100000"
+    "spark.sql.streaming.checkpointLocation": "s3a://data-bucket/checkpoints"
+    "spark.sql.streaming.stateStore.rocksdb.changelog": "true"
+    "spark.sql.streaming.metricsEnabled": "true"
+    "spark.jars.packages": "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0"
+  restartPolicy:
+    type: Always
+  driver:
+    cores: 2
+    memory: "4g"
+    serviceAccount: spark
+  executor:
+    cores: 2
+    instances: 5
+    memory: "4g"
+
+---
+# spark-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-role
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-rolebinding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spark-role
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: default
+
+---
