@@ -1,0 +1,65 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: batch-processor-2tb
+  namespace: default
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: "spark-processor:latest"
+  imagePullPolicy: Always
+  mainApplicationFile: "local:///opt/spark/apps/main.py"
+  arguments:
+    - "batch"
+    - "--input-path"
+    - "s3a://data-bucket/input/2tb-dataset"
+    - "--compression-level"
+    - "9"
+    - "--partitions"
+    - "200"
+  sparkVersion: "3.5.0"
+  sparkConf:
+    "spark.executor.memory": "8g"
+    "spark.executor.cores": "4"
+    "spark.executor.instances": "10"
+    "spark.dynamicAllocation.enabled": "true"
+    "spark.dynamicAllocation.minExecutors": "5"
+    "spark.dynamicAllocation.maxExecutors": "20"
+    "spark.sql.adaptive.enabled": "true"
+    "spark.sql.adaptive.coalescePartitions.enabled": "true"
+    "spark.serializer": "org.apache.spark.serializer.KryoSerializer"
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    "spark.hadoop.fs.s3a.endpoint": "http://minio:9000"
+    "spark.hadoop.fs.s3a.access.key": "minioadmin"
+    "spark.hadoop.fs.s3a.secret.key": "minioadmin"
+    "spark.hadoop.fs.s3a.path.style.access": "true"
+  restartPolicy:
+    type: OnFailure
+    onFailureRetries: 3
+    onFailureRetryInterval: 10
+    onSubmissionFailureRetries: 5
+    onSubmissionFailureRetryInterval: 20
+  driver:
+    cores: 4
+    coreLimit: "4000m"
+    memory: "8g"
+    labels:
+      version: 3.5.0
+    serviceAccount: spark
+    volumeMounts:
+      - name: spark-config
+        mountPath: /opt/spark/conf
+  executor:
+    cores: 4
+    instances: 10
+    memory: "8g"
+    labels:
+      version: 3.5.0
+    volumeMounts:
+      - name: spark-config
+        mountPath: /opt/spark/conf
+  volumes:
+    - name: spark-config
+      configMap:
+        name: spark-config
